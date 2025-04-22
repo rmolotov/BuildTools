@@ -1,0 +1,132 @@
+stages:
+  - prepare
+  - build_and_test
+  - deploy
+
+variables:
+  PROJECT_NAME: ECR
+  PACKAGE_NAME: com.rm.ecr
+  IMAGE: unityci/editor # https://hub.docker.com/r/unityci/editor
+  IMAGE_VERSION: 3 # This will automatically use latest v3.x.x, see https://github.com/game-ci/docker/releases
+  UNITY_DIR: $CI_PROJECT_DIR
+  VERSION_NUMBER_VAR: $CI_COMMIT_REF_SLUG-$CI_PIPELINE_ID-$CI_JOB_ID
+  VERSION_BUILD_VAR: $CI_PIPELINE_IID
+
+image: $IMAGE:$UNITY_VERSION-base-$IMAGE_VERSION
+
+get-unity-version:
+  image: alpine
+  stage: prepare
+  variables:
+    GIT_DEPTH: 1
+  script:
+    - echo UNITY_VERSION=$(cat $UNITY_DIR/ProjectSettings/ProjectVersion.txt | grep "m_EditorVersion:.*" | awk '{ print $2}') | tee prepare.env
+  artifacts:
+    reports:
+      dotenv: prepare.env
+
+.unity_before_script: &unity_before_script
+  before_script:
+    - chmod +x ./.ci/before_script.sh && ./.ci/before_script.sh
+  needs:
+    - job: get-unity-version
+      artifacts: true
+
+.unity_after_script: &unity_after_script
+  after_script:
+    - chmod +x ./.ci/return_license.sh && ./.ci/return_license.sh
+
+.cache: &cache
+  cache:
+    key: "$CI_PROJECT_NAMESPACE-$CI_PROJECT_NAME-$CI_COMMIT_REF_SLUG-$TEST_PLATFORM"
+    paths:
+      - $UNITY_DIR/Library/
+      - $UNITY_DIR/../unity-builder
+
+.license: &license
+  rules:
+    - if: '$UNITY_LICENSE != null || $UNITY_SERIAL != null'
+      when: always
+
+.unity_defaults: &unity_defaults
+  <<:
+    - *unity_before_script
+    - *cache
+    - *license
+    - *unity_after_script
+
+.build: &build
+  stage: build_and_test
+  <<: *unity_defaults
+  script:
+    - chmod +x ./.ci/build.sh && ./.ci/build.sh
+  artifacts:
+    paths:
+      - $UNITY_DIR/Builds/
+  tags:
+    - unity
+
+build-WebGL:
+  <<: *build
+  image: $IMAGE:$UNITY_VERSION-webgl-$IMAGE_VERSION
+
+  before_script:
+    - chmod +x ./.ci/before_script.sh && ./.ci/before_script.sh
+    - apt-get update && apt-get install ffmpeg -y
+  variables:
+    BUILD_TARGET: WebGL
+
+build_webserver_image:
+  image: docker:latest
+  stage: deploy
+  script:
+    - mkdir -p nginx/html
+    - cp -r "$UNITY_DIR/Builds/WebGL/${PROJECT_NAME}/." nginx/html/
+
+    - |
+      if [ "$CI_COMMIT_REF_NAME" = "feature/mvp_cicd" ]; then
+        TAG="dev"
+      elif [ "$CI_COMMIT_REF_NAME" = "prod" ]; then
+        TAG="prod"
+      else
+        TAG="$CI_COMMIT_REF_SLUG"
+      fi
+      echo "Using image tag: $TAG"
+
+    - cp .ci/nginx/nginx.conf nginx/nginx.conf
+    - docker build --no-cache -f .ci/nginx/Dockerfile -t "$CI_REGISTRY_IMAGE:$TAG" nginx/
+
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
+    - docker push "$CI_REGISTRY_IMAGE:$TAG"
+
+  only:
+    - main
+    - prod
+
+deploy_compose:
+  stage: deploy
+  tags:
+    - dev
+  needs:
+    - job: build_webserver_image
+  before_script:
+    - mkdir -p /opt/projects/client
+  script:
+    - cp .ci/nginx/docker-compose.yml /opt/projects/client/docker-compose.yml
+    - cd /opt/projects/client
+
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
+    - docker compose pull
+    - docker compose down || true
+    - docker compose up -d
+  only:
+    - main
+    - prod
+
+workflow:
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+      when: never
+    - if: $CI_COMMIT_TAG
+      when: never
+    - when: always

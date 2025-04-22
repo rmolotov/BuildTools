@@ -1,0 +1,11 @@
+{
+  "name": "com.rm.buildtools",
+  "version": "1.0.0",
+  "displayName": "Build Tools",
+  "description": "Build tools for GitLab CI",
+  "author": {
+    "name": "Roman Molotov",
+    "email": "r.molotov@yahoo.com"
+  },
+  "type": "tool"
+}

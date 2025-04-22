@@ -1,0 +1,17 @@
+services:
+  client-webgl:
+    image: registry.electrical-contact-resistance.ru/ecr/ecr-client:dev
+    container_name: ecr_webgl
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web-client.entrypoints=websecure"
+      - "traefik.http.routers.web-client.rule=Host(`demo.electrical-contact-resistance.ru`)"
+      - "traefik.http.routers.web-client.tls.certresolver=le"
+      - "traefik.http.routers.web-client.priority=1"
+    networks:
+      - traefik
+
+networks:
+  traefik:
+      external: true
+      name: traefik
